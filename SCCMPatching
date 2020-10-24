@@ -1,0 +1,435 @@
+#You will need to know your Site code for SCCM and install relevant modules
+#https://www.microsoft.com/en-us/download/details.aspx?id=46681
+#I have included our process of Popup boxes for progress AND how we log our runs.
+#There is some extra info here, but I would rather include than exclude it.
+#you will most likely need adequate admin privs with sccm to run this.
+
+
+
+
+
+
+<#┌────────────────────────────────────────────────────────────────────┐ 
+  │Connect to SCCM                                                     │ 
+  └────────────────────────────────────────────────────────────────────┘#>
+  $SiteCode = "***" # Site code 
+  $ProviderMachineName = "odc-is-sccmpri.vuhl.root.mrc.local" # SMS Provider machine name
+  $initParams = @{}
+  if((Get-Module ConfigurationManager) -eq $null) {
+      Import-Module "$($ENV:SMS_ADMIN_UI_PATH)\..\ConfigurationManager.psd1" @initParams 
+  }
+  if((Get-PSDrive -Name $SiteCode -PSProvider CMSite -ErrorAction SilentlyContinue) -eq $null) {
+      New-PSDrive -Name $SiteCode -PSProvider CMSite -Root $ProviderMachineName @initParams
+  }
+   Set-Location "$($SiteCode):\" @initParams
+<#┌────────────────────────────────────────────────────────────────────┐ 
+  │ENDOF: Connect to SCCM                                              │ 
+  └────────────────────────────────────────────────────────────────────┘#>
+
+
+  <#┌────────────────────────────────────────────────────────────────────┐ 
+  │ __Progress_Window__                                                │ 
+  └────────────────────────────────────────────────────────────────────┘#>
+  Add-Type -AssemblyName System.Windows.Forms
+  [System.Windows.Forms.Application]::EnableVisualStyles() 
+
+  
+  $ProgForm                            = New-Object system.Windows.Forms.Form
+  $ProgForm.TopMost                    = $true
+  $ProgForm.MinimizeBox                = $False
+  $ProgForm.MaximizeBox                = $False
+  $ProgForm.ControlBox                 = $false
+  $ProgForm.StartPosition              = [System.Windows.Forms.FormStartPosition]::CenterScreen
+  $ProgForm.WindowState                = "Normal"
+  $ProgForm.AutoSize                   = $True
+  $ProgForm.AutoSizeMode               = "GrowAndShrink"
+  $ProgForm.ShowIcon                   = $False
+  $ProgForm.FormBorderStyle            = 'FixedToolWindow'
+  $ProgForm.Update()
+  
+  $MainLabel                       = New-Object system.Windows.Forms.Label
+  $MainLabel.text                  = "SCCM Collection Script is Running....."
+  $MainLabel.AutoSize              = $true
+  $MainLabel.width                 = 25
+  $MainLabel.height                = 10
+  $MainLabel.location              = New-Object System.Drawing.Point(5,5)
+  $MainLabel.Font                  = 'Microsoft Sans Serif,12'
+  
+  $ProgForm.controls.AddRange(@($MainLabel))
+  $ProgForm.Add_Shown({$ProgForm.Activate()})
+  
+  $ProgForm.Visible = $false
+  $ProgForm.Update()
+  $progform.TopMost = $true
+  #$ProgForm.ShowDialog() 
+<#┌────────────────────────────────────────────────────────────────────┐ 
+│ __ENDOF:_Progress_Window__                                          │ 
+└────────────────────────────────────────────────────────────────────┘#> 
+
+
+
+function popUpOpen{
+  param([string] $message)
+$ProgForm.Visible = $True
+$MainLabel.text = $message
+$ProgForm.Update()
+}
+
+function popUpClose{
+$ProgForm.Visible = $false
+$ProgForm.Update()
+}
+popUpClose
+
+
+popUpOpen -message "Starting Script- Gathering Logs and Variables"
+
+$LogFolder = "****"
+$logFileName = (Get-Date -f yyyy-MM-dd)
+$log = "$logFolder\$logFileName"
+set-location C:
+new-item -path "$log.txt" -force
+set-location "$($SiteCode):\" @initParams
+
+
+$logplus = 0
+$logdate = get-date
+
+
+
+  function write2Log
+  {
+  param ([string]$message)
+  Set-Location C:
+  add-content -path $log -value $message 
+  Set-Location "$($SiteCode):\" @initParams
+  }
+
+
+write2Log -message "Ran By: $Env:Username`r`n at  $logdate`r`n"
+
+#grabs the current date and goes back 31 days
+#creates dates for future deployments
+$CurrentDate = Get-date 
+$pastDate = $currentdate.date.AddDays(-31)
+$EucLabDeployDate = Get-Date 
+$TrustedDeployDate = $EucLabDeployDate.date.addDays(2)
+$PhysicalDeployDate = $TrustedDeployDate.date.AddDays(4)
+$ALLVUHLDeployDate = $PhysicalDeployDate.date.Adddays(2)
+
+write2Log -message "---------------------------------"
+write2Log -message "Deployment Dates`n"
+write2Log -message "---------------------------------`n"
+
+
+write2Log -message "
+Trusted Date - $TrustedDeployDate`r`n
+Physical Date - $physicalDeployDate`r`n
+ALL VUHL - $ALLVUHLDeployDate`r`n`r`n
+"
+
+#Settings Variables
+$deploymentPath = "***"
+$folderName = "Workstation_$($currentDate.Year)_$($currentDate.month)_Patch_Tuesday"
+$fullPath = "$($deploymentPath)\$foldername"
+$sugName = "Workstation_$($currentdate.Year)_$($currentDate.month)_Patch_Tuesday"
+
+write2Log -message "---------------------------------"
+write2Log -message "MISC`n"
+write2Log -message "---------------------------------`n"
+
+write2Log -message "
+FolderPath - $fullPath`r`n
+Sug name - $sugName`r`n
+"
+
+#deployments
+$EUCLab = "[1] - EUS Lab Machines (Test Rack)/CBI Test Machine"
+$EUS = "[2] - EUS Machines"
+$Trusted = "[3] - Trusted Testers / Encompass & CRM / Branch / Deskside Testers/ CBI Trusted Tester"
+$Physical = "[4] - Physical Testers (Large Group)"
+$All = "[5] - All Windows Workstations Minus Mifi Users"
+
+
+
+#creates an array of strings that we wish to exclude from our updates
+$softwareExcludeArray =@("server","ARM64","Enterprise Server","driver","Windows 10 Version 1703","Windows 10 Version 2004", "Windows 10 Version 1607", "Windows 10 Version 1709", "Language Interface Pack"
+,"Windows 10 Version 1511","x86-based","Microsoft Web Applications", "Microsoft SharePoint Foundation", 
+"Microsoft SharePoint Server 2010", , "windows 7",
+"Microsoft PowerPoint Viewer 2010","Definition","Microsoft Office 2016 32-Bit Edition", 
+"Defender","*office 365*", "*Microsoft 365*", "Microsoft * 32-bit", "*.NET Framework 4.8*", "*Office 2019*", "*Office 2010*")
+
+
+write2Log -message "---------------------------------"
+write2Log -message "Patch Exclusions`n"
+write2Log -message "---------------------------------`n"
+
+foreach($exclusion in $softwareExcludeArray)
+{
+    write2Log -message "$Exclusion`r`n"
+}
+
+
+
+#grabs updates with parameters. Last months updates with certain categories
+$Updates = Get-CMSoftwareUpdate -fast -DatePostedMin $pastDate -DatePostedMax $CurrentDate -IsSuperseded $false -IsExpired $false -CategoryName ("windows 10", "windows 10, version 1903 and later", "Office 2010", "office 2016", "Office 365 Client", "Windows Defender", "Silverlight", "Office 2013")  | select localizeddisplayname, articleID
+
+
+# all updates before we exclude them ( for use in reporting)
+$allUpdates = $Updates
+
+write2Log -message "---------------------------------"
+write2Log -message "Custom severity check`r`n"
+write2Log -message "---------------------------------`r`n"
+
+$UpdateCounter = 1
+#marks all updates as IMPORTANT
+foreach($update in $updates)
+{
+
+  try{
+  Set-CMSoftwareUpdate -name $update.localizeddisplayname -CustomSeverity "important"
+  Write2Log -message "$($update.localizedDisplayName) Severity set to Important succesfully`r`n"
+
+  }catch
+  {
+    Write2Log -message "$($update.localizedDisplayName) Severity set NOT set correctly`r`n"
+  }
+  popUpOpen -message "$updateCounter of $($updates.count) Updates Marked Important"
+$updateCounter++
+}
+
+
+popUpClose
+$updateCounter =1
+#iterates through each update and excludes what we don't want from them
+foreach($SS in $softwareExcludeArray)
+{
+  $updates = $updates | where {$_ -notlike "*$ss*"} 
+  popUpOpen -message "$updatecounter of $($SS.Count) Exclusions done"
+  $updateCounter++
+}
+
+Popupclose
+write2Log -message "`r`n---------------------------------"
+write2Log -message "Collecting appropriate Updates`r`n"
+write2Log -message "---------------------------------`r`n"
+
+foreach($update in $updates)
+{
+    write2Log -message "$($update.localizeddisplayname) `r`n"
+}
+
+
+#current Updates that will be applied ( for use in reporting later)
+$usedUpdates =$updates
+
+
+write2Log -message "`r`n---------------------------------"
+write2Log -message "Marking historical patches`r`n"
+write2Log -message "---------------------------------`r`n"
+
+$updateCounter =1
+#Marks kept updates as NONE (for use with historical patches)
+foreach($update in $updates)
+{
+  try{
+    Set-CMSoftwareUpdate -name $update.localizeddisplayname -CustomSeverity "none"
+    Write2Log -message "$($update.localizedDisplayName) Severity set to NONE succesfully`r`n"
+
+  }catch{
+    Write2Log -message "$($update.localizedDisplayName) Severity NOT set `r`n"
+
+  }
+  popUpOpen -message "$updateCounter out of $($updates.count) marked as NONE"
+  $updateCounter++
+}
+
+$updateCounter = 1
+popUpClose
+write2Log -message "`r`n---------------------------------"
+write2Log -message "Attempting to create SUG`n"
+write2Log -message "---------------------------------`n"
+popUpOpen -message"$sugname is beingg created"
+
+#create a new SUG
+try{
+New-CMSoftwareUpdateGroup -Name $sugName
+write2Log -message "$sugname created succesfully`r`n"
+}catch
+{
+  write2Log -message "$sugname was NOT created succesfully`r`n"
+
+}
+popUpClose
+
+write2Log -message "`r`n---------------------------------"
+write2Log -message "Adding Updates to $sugname`n"
+write2Log -message "---------------------------------`n"
+
+$updatecounter =1
+#ADD each update into the newly created Sug
+foreach($update in $updates)
+{
+$logplus++ 
+write2Log -message "---------------------------------"
+write2Log -message "$($update.localizedDisplayName) $logplus of $($updates.count)"
+write2Log -message "---------------------------------`r`n"
+
+  try{
+    Add-CMSoftwareUpdateToGroup -SoftwareUpdateName $update.localizeddisplayname -SoftwareUpdateGroupName $sugname
+    write2Log -message "$($update.localizeddisplayname) succesfully added to $sugname`n"
+  }catch{
+    write2Log -message "$($update.localizeddisplayname) was NOT added to $sugname`n"
+
+  }
+  popUpOpen -message "$updateCounter out of $($updates.count) updates added to $sugname"
+  $updateCounter++
+}
+$logplus = 0
+popUpClose
+$updateCounter =1
+
+
+write2Log -message "`r`n---------------------------------"
+write2Log -message "Creating New Deployment Package`n"
+write2Log -message "---------------------------------`n"
+popUpOpen -message "Creating DeploymentPackage"
+#Creates a new Deployment Package ( this will go into created Folder From above, SCCM knows this)
+try{
+
+New-CMSoftwareUpdateDeploymentPackage -Name $sugname -path $fullpath 
+write2Log -message "$sugname deployment package created succesfully`n"
+
+}catch{
+    write2Log -message "$sugname deployment package failed`n"
+}
+popUpClose
+
+write2Log -message "`r`n---------------------------------"
+write2Log -message "Downloading updates to new Path`r`n"
+write2Log -message "---------------------------------`n"
+
+
+#Download Updates to new path
+foreach($update in $updates)
+{
+$logplus++ 
+write2Log -message "---------------------------------"
+write2Log -message "$($update.localizedDisplayName) $logplus of $($updates.count)"
+write2Log -message "---------------------------------`n"
+
+  try{
+    Save-CMSoftwareUpdate -SoftwareUpdateName $update.localizeddisplayname -DeploymentPackageName $sugname -RetryCount 3
+    write2Log -message "$($update.localizeddisplayname) Downloaded succesfully`n"
+
+    }catch{
+        write2Log -message "$($update.localizeddisplayname) failed to download`n"
+    }
+    popUpOpen -message "$updateCounter out of $($updates.count) Updates downloaded to path"
+    $updateCounter++
+}
+$logplus = 0
+
+popUpClose
+$updateCounter =1
+
+write2Log -message "`r`n---------------------------------"
+write2Log -message "Distributing to Points`r`n"
+write2Log -message "---------------------------------`r`n"
+popUpOpen -message "Distributing Content"
+try{
+  Start-CMContentDistribution -DeploymentPackageName $sugname -DistributionPointGroupName "Workstation_DPG" 
+  write2Log -message "$sugname started distributing succesfully"
+
+}catch
+{
+    write2Log -message "$sugname Failed"
+}
+popUpClose
+
+
+
+
+
+#formats the available date so SCCM accepts it
+$FirstDeploy = "$($EucLabDeployDate.ToString("yyyy/MM/dd")) 10:00AM"
+$secondDeploy = "$($TrustedDeployDate.ToString("yyyy/MM/dd")) 10:00AM"
+$ThirdDeploy = "$($physicalDeployDate.ToString("yyyy/MM/dd")) 10:00AM"
+$LastDeploy = "$($ALLVUHLDeployDate.ToString("yyyy/MM/dd")) 10:00PM"
+
+#formats the Required Date so SCCM accepts it
+$firstDeadline = "$($EucLabDeployDate.ToString("yyyy/MM/dd")) 10:00PM"
+$secondDeadline = "$($TrustedDeployDate.ToString("yyyy/MM/dd")) 10:00PM"
+$thirdDeadline = "$($physicalDeployDate.ToString("yyyy/MM/dd")) 10:00PM"
+$LastDeadline = "$($ALLVUHLDeployDate.ToString("yyyy/MM/dd")) 10:30PM"
+
+write2Log -message "`r`n---------------------------------"
+write2Log -message "Set Deployment Dates`n"
+write2Log -message "---------------------------------`n"
+
+
+write2Log -message "`r`n First Deployment date is: $firstdeploy   First Deadline is $firstDeadline`r`n"
+write2Log -message "`r`n Second Deployment date is: $Seconddeploy   Second Deadline is $SecondDeadline`r`n"
+write2Log -message "`r`n Third Deployment date is: $ThirdDeploy   Third Deadline is $ThirdDeadline`r`n"
+write2Log -message "`r`n Fourth Deployment date is: $Lastdeploy   Fourth Deadline is $LastDeadline`r`n"
+
+
+
+
+write2Log -message "`r`n---------------------------------"
+write2Log -message "Creating Deployments`n"
+write2Log -message "---------------------------------`n"
+$deploymentCounter =1
+
+#Creates deployments for each collection in PROCESS
+
+
+try{
+popUpOpen -message "Deploying Updates to $eucLab"
+New-CMSoftwareUpdateDeployment -DeploymentName "Microsoft Software Updates - $firstDeploy"  -SoftwareUpdateGroupName  $sugname -CollectionName $eucLab   -DeploymentType Required  -VerbosityLevel AllMessages -AvailableDateTime $FirstDeploy -AcceptEula  -DeadlineDateTime $FirstDeadline  -UserNotification DisplaySoftwareCenterOnly -SoftwareInstallation $false  -AllowRestart $false  -RestartServer $False  -PersistOnWriteFilterDevice $True -RequirePostRebootFullScan $True -ProtectedType RemoteDistributionPoint 
+write2Log -message "EucLab set for $firstdeploy`r`n"
+
+
+popUpOpen -message "Deploying Updates to $EUS"
+New-CMSoftwareUpdateDeployment -DeploymentName "Microsoft Software Updates - $firstDeploy" -SoftwareUpdateGroupName $sugname -CollectionName $EUS  -DeploymentType Required  -VerbosityLevel AllMessages -AvailableDateTime $FirstDeploy -AcceptEula  -DeadlineDateTime $FirstDeadline -UserNotification DisplaySoftwareCenterOnly -SoftwareInstallation $false   -AllowRestart $false   -RestartServer $False  -PersistOnWriteFilterDevice $True -RequirePostRebootFullScan $True -ProtectedType RemoteDistributionPoint 
+write2Log -message "EUS set for $firstdeploy`r`n"
+
+
+popUpOpen -message "Deploying Updates to $Trusted"
+New-CMSoftwareUpdateDeployment -DeploymentName "Microsoft Software Updates - $secondDeploy" -SoftwareUpdateGroupName $sugname -CollectionName $Trusted   -DeploymentType Required  -VerbosityLevel AllMessages -AvailableDateTime $secondDeploy -AcceptEula  -DeadlineDateTime $secondDeadline -UserNotification DisplaySoftwareCenterOnly -SoftwareInstallation $false   -AllowRestart $false   -RestartServer $False  -PersistOnWriteFilterDevice $True -RequirePostRebootFullScan $True -ProtectedType RemoteDistributionPoint 
+write2Log -message "Trusted testers set for $seconddeploy`r`n"
+
+
+popUpOpen -message "Deploying Updates to $Physical"
+New-CMSoftwareUpdateDeployment -DeploymentName "Microsoft Software Updates - $thirdDeploy" -SoftwareUpdateGroupName $sugname -CollectionName $Physical  -DeploymentType Required  -VerbosityLevel AllMessages -AvailableDateTime $ThirdDeploy -AcceptEula  -DeadlineDateTime $thirdDeadline -UserNotification DisplaySoftwareCenterOnly -SoftwareInstallation $false   -AllowRestart $false   -RestartServer $False  -PersistOnWriteFilterDevice $True -RequirePostRebootFullScan $True -ProtectedType RemoteDistributionPoint 
+write2Log -message "Physical testers set for $thirddeploy`r`n"
+
+
+popUpOpen -message "Deploying Updates to $ALL"
+New-CMSoftwareUpdateDeployment -DeploymentName "Microsoft Software Updates - $lastDeploy" -SoftwareUpdateGroupName $sugname -CollectionName $ALL   -DeploymentType Required  -VerbosityLevel AllMessages -AvailableDateTime $LastDeploy -AcceptEula  -DeadlineDateTime $LastDeadline -UserNotification DisplaySoftwareCenterOnly -SoftwareInstallation $false   -AllowRestart $false   -RestartServer $False  -PersistOnWriteFilterDevice $True -RequirePostRebootFullScan $True -ProtectedType RemoteDistributionPoint 
+write2Log -message "All VUHL testers set for $Lastdeploy`r`n"
+
+
+}catch
+{
+  write2Log -message "EucLab NOT set for $firstdeploy`r`n"
+  write2Log -message "EUS NOT set for $firstdeploy`r`n"
+  write2Log -message "Trusted testers NOT set for $seconddeploy`r`n"
+  write2Log -message "Physical testers NOT set for $thirddeploy`r`n"
+  write2Log -message "All VUHL testers NOT set for $Lastdeploy`r`n" 
+
+}
+
+popUpOpen -message "Finishing script and logs..."
+#Creates CSV for all appliated patched for reporting
+set-location C: 
+$allUpdates.localizeddisplayname | sort-object localizeddisplayname | set-content -Path "***"
+$usedUpdates.localizeddisplayname | sort-object localizeddisplayname | set-content -Path "****" 
+
+$logendDate = get-date
+write2Log -message "`r`n`r`n
+Script completed as of $logendDate`r`n
+it took $(($logenddate - $logdate).Minutes) minutes to complete."
+
+popUpClose
